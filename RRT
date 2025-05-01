@@ -1,0 +1,143 @@
+class Node:
+    def __init__(self, pt, parent=None, path_length=0):
+        self.point = pt # n-Dimensional point
+        self.parent = parent # Parent node
+        self.path_from_parent = [] # List of points along the way from the parent node (for visualization)
+        self.path_length = path_length
+
+def get_random_valid_vertex(map):
+    vertex = None
+    width = map.shape[0]
+    while vertex is None:
+        pt = np.random.randint(width, size=2)
+        if (map[pt[0]][pt[1]] == 0):
+            vertex = pt
+    return vertex
+
+def get_nearest_vertex(node_list, q_point):
+    nearest_node = None
+    nearest_dist = 99999
+    for node in node_list:
+        dist = np.linalg.norm(q_point - node.point)
+        if dist < nearest_dist:
+            nearest_node = node
+            nearest_dist = dist
+    return nearest_node
+
+def steer(map, from_point, to_point, delta_q):
+    while True:
+        dist = np.linalg.norm(from_point - to_point)
+        if dist > delta_q:
+            to_point = ((to_point - from_point) * (delta_q / dist)) + from_point
+        path = np.linspace(from_point, to_point, 10)
+
+        # roll a new point if the first section of the path is blocked
+        part = path[1]
+        xx = round(part[0])
+        yy = round(part[1])
+        if (map[xx][yy] == 1):
+            to_point = get_random_valid_vertex(map)
+        else:
+            break
+
+    exit = 0
+    for i in range(100):
+        path = np.linspace(from_point, to_point, 10)
+        if exit:
+            break
+        for i in range(10):
+            part = path[i]
+            xx = round(part[0])
+            yy = round(part[1])
+            if (map[xx][yy] == 0):
+                exit += 1
+            else:
+                to_point = (to_point - from_point) * ( (i + 1) / 11) + from_point
+                exit = 0
+                break
+    return path
+
+def draw_pixels(draw, color):
+    display.setColor(color)
+    for i in range(len(draw)):
+        if len(draw) == 2:
+            part = draw
+        else:
+            part = draw[i]
+        display.drawPixel(round(part[0]), round(part[1]))
+
+def rrtstar(map, start_x, start_y, end_x, end_y, reps, delta_q, goal_percent, draw_all, draw_path, print_waypoints):
+
+    node_list = [Node(np.array([start_x, start_y]), parent=None)]
+    waypoints = []
+
+    for i in range(reps):
+        # Get valid spot for a point to go
+        if random.random() < goal_percent:
+            new_node = Node(np.array([end_x, end_y]))
+        else:
+            new_node = Node(get_random_valid_vertex(map))
+        parent = get_nearest_vertex(node_list, new_node.point)
+        new_node.parent = parent
+        new_node.path_from_parent = steer(map, parent.point, new_node.point, delta_q)
+        new_node.point = new_node.path_from_parent[9]
+
+        # Find all nearby nodes
+        nearby_nodes = []
+        for node in node_list:
+            dist = np.linalg.norm(new_node.point - node.point)
+            if dist <= delta_q:
+                nearby_nodes.append(node)   
+
+        # Find best parent for the new node
+        for node in nearby_nodes:
+            if np.linalg.norm(steer(map, node.point, new_node.point, delta_q)[9] - new_node.point) < 1e-5: #If there are no obstacles
+                dist_to_node   = np.linalg.norm(new_node.point - node.point)
+                dist_to_parent = np.linalg.norm(new_node.point - parent.point)
+                if node.path_length + dist_to_node < parent.path_length + dist_to_parent:
+                    parent = node
+                    new_node.path_from_parent = np.linspace(parent.point, new_node.point, 10)
+            
+        # Assign variables
+        new_node.parent = parent
+        new_node.path_from_parent = np.linspace(parent.point, new_node.point, 10)
+        new_node.path_length = np.linalg.norm(new_node.point - parent.point) + parent.path_length
+        node_list.append(new_node)
+                
+        # See if the nearby nodes would rather change their parent to the new node
+        for node in nearby_nodes:
+            parent = node.parent
+            if parent is not None: #If it's not the starting node
+                if np.linalg.norm(steer(map, node.point, new_node.point, delta_q)[9] - new_node.point) < 1e-5: #If there are no obstacles
+                    dist_to_new    = np.linalg.norm(node.point - new_node.point)
+                    dist_to_parent = np.linalg.norm(node.point - parent.point)
+                    if new_node.path_length + dist_to_new < parent.path_length + dist_to_parent:
+                        node.path_from_parent = np.linspace(node.point, new_node.point, 10)
+                        node.parent = new_node
+
+        # Finalize and draw
+        node_list.append(new_node)
+        if draw_all:
+            draw_pixels(new_node.path_from_parent, int(0xFFF000))
+            draw_pixels(new_node.point, int(0xFF0000))
+
+        # Quit if a valid path is found
+        if np.linalg.norm(new_node.point - [end_x, end_y]) < 1e-5:
+            break
+
+    while new_node is not None:
+        if draw_path:
+            draw_pixels(new_node.path_from_parent, int(0x0088FF))
+            draw_pixels(new_node.point, int(0x0088FF))
+        x = new_node.point[0]
+        y = new_node.point[1]
+        waypoints.insert(0, (-12*(1-(x/360)), -12*(y/360)))
+        new_node = new_node.parent
+
+    if print_waypoints:
+        print("Waypoints: ")
+        for point in waypoints:
+            print(point)
+
+    np.save("path.npy", waypoints)
+    return waypoints
