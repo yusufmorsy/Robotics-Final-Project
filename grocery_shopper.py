@@ -95,8 +95,8 @@ pose_x = pose_y = pose_theta = 0.0
 pose_x_last = pose_y_last = 0.0
 
 # Mode and waypoints
-mode = "mapping"
-#mode = "autonomous"
+#mode = "mapping"
+mode = "autonomous"
 waypoints = []
 gripper_status = "closed"
 
@@ -110,16 +110,21 @@ current_frame = 0
 current_portion = PORTIONS - 1
 
 # Helper: world→map coords
-def convert_to_map(px, py):
-    mx = MAP_WIDTH  - (MAP_HEIGHT/(2*WORLD_WIDTH)) * (py+WORLD_HEIGHT)
-    my = MAP_HEIGHT - (MAP_HEIGHT/(2*WORLD_WIDTH)) * (px+WORLD_WIDTH)
-    mx = max(0, min(MAP_WIDTH-1,  mx))
-    my = max(0, min(MAP_HEIGHT-1, my))
-    return int(mx), int(my)
 
+
+
+def convert_to_map(px, py):
+    # horizontal pixel index (x‑axis) represents WORLD‑Y
+    mx = MAP_WIDTH  - (MAP_WIDTH  /(2*WORLD_HEIGHT)) * (py + WORLD_HEIGHT)
+    # vertical   pixel index (y‑axis) represents WORLD‑X
+    my = MAP_HEIGHT - (MAP_HEIGHT /(2*WORLD_WIDTH )) * (px + WORLD_WIDTH)
+    return int(max(0, min(MAP_WIDTH -1, mx))), \
+           int(max(0, min(MAP_HEIGHT-1, my)))
+
+# ---------- pixel → metres  (exact algebraic inverse) ----------
 def convert_to_world(mx, my):
-    py = (MAP_WIDTH - mx)  / (MAP_HEIGHT/(2*WORLD_WIDTH)) - WORLD_HEIGHT
-    px = (MAP_HEIGHT - my) / (MAP_HEIGHT/(2*WORLD_WIDTH)) - WORLD_WIDTH
+    py = (MAP_WIDTH  - mx) / (MAP_WIDTH  /(2*WORLD_HEIGHT)) - WORLD_HEIGHT
+    px = (MAP_HEIGHT - my) / (MAP_HEIGHT /(2*WORLD_WIDTH )) - WORLD_WIDTH
     return px, py
 
 # RRT support structures
@@ -180,12 +185,13 @@ def rrtstar(m, sx, sy, ex, ey, reps, delta, gp, draw_all, draw_path, print_wp):
     node = nodes[-1]
     while node:
         if draw_path:
-            display.setColor(int(0x60FF40))
+            display.setColor(0x60FF40)
             for pt in node.path_from_parent:
                 display.drawPixel(round(pt[0]), round(pt[1]))
             display.drawPixel(round(node.point[0]), round(node.point[1]))
-        wx, wy = convert_to_world(node.point[0], node.point[1])
-        wpt.insert(0, (wx, wy))
+
+        # >>> NEW: keep pixel indices, no convert_to_world <<<
+        wpt.insert(0, (int(node.point[0]), int(node.point[1])))
         node = node.parent
     if print_wp:
         print("Waypoints:", wpt)
@@ -193,6 +199,10 @@ def rrtstar(m, sx, sy, ex, ey, reps, delta, gp, draw_all, draw_path, print_wp):
     return wpt
 
 # Main control loop
+
+path_len = 0
+nav_state = "turn"
+
 while robot.step(timestep) != -1:
     # Read pose
     pose_x, pose_y = gps.getValues()[0], gps.getValues()[1]
@@ -259,51 +269,51 @@ while robot.step(timestep) != -1:
 
     # Autonomous mode: follow waypoints
     elif mode == "autonomous":
-        # 1) generate a fresh RRT path if needed
+
+        # 1) (re)generate an RRT path if needed ----------------------
         if not waypoints:
             gx, gy = get_random_valid_vertex(collision_map)
             waypoints = rrtstar(collision_map, map_x, map_y, gx, gy,
                                 REPS, DELTA_Q, GOAL_PERCENT,
                                 draw_all=0, draw_path=1, print_wp=1)
+            path_len = len(waypoints)        # remember how many we got
 
-        # 2) simple angular‐error path follower
-        tx, ty = waypoints[0]
-        dx, dy = tx - pose_x, ty - pose_y
-        dist = math.hypot(dx, dy)
+        # 2) simple angular‑error path follower ----------------------
+        tx, ty      = waypoints[0]           # target waypoint (pixels)
+        px, py      = map_x, map_y           # robot pose    (pixels)
+        dx, dy      = tx - px, ty - py
+        dist_pixels = math.hypot(dx, dy)
 
-        # desired heading
         target_theta = math.atan2(dy, dx)
-        # wrap both angles to [-π, π]
-        err = (target_theta - pose_theta + math.pi) % (2*math.pi) - math.pi
+        err = (pose_theta - target_theta + math.pi) % (2*math.pi) - math.pi
 
-        # thresholds
-        fov = math.pi / 8        # ±22.5°
-        close_enough = 0.1       # 10 cm
-        max_v = MAX_SPEED / 3    # slower cruising speed
+        # ---- status print with waypoint index ----------------------
+        wp_idx = path_len - len(waypoints) + 1   # 1‑based counter
+        print(f"[{wp_idx:02d}/{path_len}] "
+              f"pose=({px:3d},{py:3d}) θ={pose_theta:+.2f} | "
+              f"wp=({tx},{ty}) dist={dist_pixels:5.1f}px err={err:+.2f}")
+        # ------------------------------------------------------------
 
-        # advance to next waypoint if we're there
-        if dist < close_enough:
+        fov          = math.pi/8          # ±22.5°
+        close_px     = 10                  # 4 px ≈ 10 cm
+        max_v        = MAX_SPEED/3
+
+        # reached? ---------------------------------------------------
+        if dist_pixels < close_px:
+            print(f"✔ reached waypoint {wp_idx} ({tx},{ty})")
             waypoints.pop(0)
             vL = vR = 0.0
-        else:
-            if abs(err) <= fov:
-                # drive straight
-                vL =  max_v
-                vR =  max_v
-            elif abs(err) > math.pi - fov:
-                # u-turn
-                vL = -max_v
-                vR = -max_v
-            elif err < 0:
-                # turn right in place
-                vL = -max_v/2
-                vR =  max_v/2
-            else:
-                # turn left in place
-                vL =  max_v/2
-                vR = -max_v/2
+            continue                      # skip to next time‑step
 
-        # 3) clamp to each wheel’s maxVelocity
+        # heading control -------------------------------------------
+        if abs(err) <= fov:               # straight
+            vL = vR = max_v
+        elif err > 0:                     # turn right in place
+            vL = -max_v/2;  vR =  max_v/2
+        else:                             # turn left in place
+            vL =  max_v/2;  vR = -max_v/2
+
+        # 3) clamp to wheel limits ----------------------------------
         ml = robot_parts["wheel_left_joint"].getMaxVelocity()
         mr = robot_parts["wheel_right_joint"].getMaxVelocity()
         vL = max(-ml, min(vL, ml))
@@ -314,21 +324,30 @@ while robot.step(timestep) != -1:
     if speed > 0.005:
         readings = lidar.getRangeImage()[83:-83]
         for i, r in enumerate(readings):
-            if r > LIDAR_SENSOR_MAX_RANGE * 0.6: #the multiplier is there because things get fuzzy at the end of the range
+            if r > LIDAR_SENSOR_MAX_RANGE * 0.6:        # ignore far/fuzzy hits
                 continue
             alpha = lidar_offsets[i] + pose_theta
-
-            #Detected object's offset from the robot
+    
+            # object coordinates in world space -------------------------
             ox = -math.cos(alpha) * r
             oy =  math.sin(alpha) * r
-
-            #Draw object on the map
             mx, my = convert_to_map(ox + pose_x, oy + pose_y)
-            val = map[mx, my] + 0.03
-            map[mx, my] = min(val, 1.0)
-
-            #Draw object in white if fully detected, or a shade of blue if partially detected
-            display.setColor(0xFFFFFF if map[mx, my] >= 1.0 else int(map[mx, my]*255))
+    
+            # update probabilistic map ---------------------------------
+            map[mx, my] = min(map[mx, my] + 0.03, 1.0)
+    
+            # -------- NEW  : immediate collision‑map "inflation" -------
+            if map[mx, my] >= 0.2:                     # occupancy threshold
+                for dx in range(-BUFFER, BUFFER + 1):
+                    for dy in range(-BUFFER, BUFFER + 1):
+                        xi, yi = mx + dx, my + dy
+                        if 0 <= xi < MAP_WIDTH and 0 <= yi < MAP_HEIGHT:
+                            collision_map[xi, yi] = 1
+            # -----------------------------------------------------------
+    
+            # visualisation (blue→white with occupancy) -----------------
+            color = 0xFFFFFF if map[mx, my] >= 1.0 else int(map[mx, my] * 255)
+            display.setColor(color)
             display.drawPixel(mx, my)
 
     # Apply wheel velocities
