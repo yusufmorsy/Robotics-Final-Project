@@ -21,7 +21,7 @@ MOTOR_RIGHT = 11
 N_PARTS = 12
 
 # RRT parameters
-REPS = 1000
+REPS = 100
 DELTA_Q = 10
 GOAL_PERCENT = 0.05
 
@@ -39,7 +39,7 @@ lidar_offsets = np.linspace(-LIDAR_ANGLE_RANGE/2, LIDAR_ANGLE_RANGE/2, LIDAR_ANG
 lidar_offsets = lidar_offsets[83:-83]  # remove chassis‐blocked bins
 
 # Mapping update frequency
-FRAMES_BETWEEN_UPDATES = 20
+FRAMES_BETWEEN_UPDATES = 5
 PORTIONS = 36
 BUFFER = 7
 
@@ -95,14 +95,15 @@ pose_x = pose_y = pose_theta = 0.0
 pose_x_last = pose_y_last = 0.0
 
 # Mode and waypoints
-#mode = "mapping"
-mode = "autonomous"
+mode = "mapping"
+#mode = "autonomous"
 waypoints = []
 gripper_status = "closed"
 
 # Map arrays
 map = np.zeros((MAP_WIDTH, MAP_HEIGHT))
 collision_map = np.zeros((MAP_WIDTH, MAP_HEIGHT))
+DRAW_COLLISION = 0
 
 # Frame counters
 current_frame = 0
@@ -110,11 +111,16 @@ current_portion = PORTIONS - 1
 
 # Helper: world→map coords
 def convert_to_map(px, py):
-    mx = MAP_HEIGHT - math.floor((MAP_HEIGHT/(2*WORLD_WIDTH))*(py+WORLD_HEIGHT)) - (MAP_HEIGHT-MAP_WIDTH)
-    my = MAP_HEIGHT - math.floor((MAP_HEIGHT/(2*WORLD_WIDTH))*(px+WORLD_WIDTH))
-    mx = max(0, min(MAP_WIDTH-1, mx))
+    mx = MAP_WIDTH  - (MAP_HEIGHT/(2*WORLD_WIDTH)) * (py+WORLD_HEIGHT)
+    my = MAP_HEIGHT - (MAP_HEIGHT/(2*WORLD_WIDTH)) * (px+WORLD_WIDTH)
+    mx = max(0, min(MAP_WIDTH-1,  mx))
     my = max(0, min(MAP_HEIGHT-1, my))
     return int(mx), int(my)
+
+def convert_to_world(mx, my):
+    py = (MAP_WIDTH - mx)  / (MAP_HEIGHT/(2*WORLD_WIDTH)) - WORLD_HEIGHT
+    px = (MAP_HEIGHT - my) / (MAP_HEIGHT/(2*WORLD_WIDTH)) - WORLD_WIDTH
+    return px, py
 
 # RRT support structures
 class Node:
@@ -178,10 +184,8 @@ def rrtstar(m, sx, sy, ex, ey, reps, delta, gp, draw_all, draw_path, print_wp):
             for pt in node.path_from_parent:
                 display.drawPixel(round(pt[0]), round(pt[1]))
             display.drawPixel(round(node.point[0]), round(node.point[1]))
-        wpt.insert(0, (
-            -12*(1-(node.point[0]/360)),
-            -12*(node.point[1]/360)
-        ))
+        wx, wy = convert_to_world(node.point[0], node.point[1])
+        wpt.insert(0, (wx, wy))
         node = node.parent
     if print_wp:
         print("Waypoints:", wpt)
@@ -213,24 +217,30 @@ while robot.step(timestep) != -1:
 
     # Mapping mode: build collision map & random RRT goals
     if mode == "mapping":
-        vL = vR = MAX_SPEED / 2
+        #Move forward like an idiot (for testing)
+        vL = MAX_SPEED/2
+        vR = MAX_SPEED/2
+
         current_frame += 1
         if current_frame >= FRAMES_BETWEEN_UPDATES:
             current_frame = 0
             current_portion = (current_portion + 1) % PORTIONS
             # inflate collision map once per full cycle
             if current_portion == 0:
-                display.setColor(0x008F00)
-                for x in range(MAP_WIDTH):
-                    for y in range(MAP_HEIGHT):
-                        if collision_map[x, y] == 1:
-                            display.drawPixel(x, y)
-                # new random RRT goal
+                if DRAW_COLLISION == 1:
+                    display.setColor(0x008F00)
+                    for x in range(MAP_WIDTH):
+                        for y in range(MAP_HEIGHT):
+                            if collision_map[x, y] == 1:
+                                display.drawPixel(x, y)
+                            
+                # new random RRT goal once per full cycle
                 gx, gy = get_random_valid_vertex(collision_map)
                 waypoints = rrtstar(collision_map, map_x, map_y, gx, gy,
                                     REPS, DELTA_Q, GOAL_PERCENT,
                                     draw_all=0, draw_path=1, print_wp=1)
-            # update a slice of the map→collision_map
+                
+            # update a slice of the map and the collision_map
             start = current_portion * math.ceil(MAP_HEIGHT/PORTIONS)
             end = min(MAP_HEIGHT, start + math.ceil(MAP_HEIGHT/PORTIONS))
             for x in range(MAP_WIDTH):
@@ -245,6 +255,8 @@ while robot.step(timestep) != -1:
                         # clear map pixel if not obstacle
                         display.setColor(0x000000)
                         display.drawPixel(x, y)
+
+
     # Autonomous mode: follow waypoints
     elif mode == "autonomous":
         # 1) generate a fresh RRT path if needed
@@ -302,14 +314,20 @@ while robot.step(timestep) != -1:
     if speed > 0.005:
         readings = lidar.getRangeImage()[83:-83]
         for i, r in enumerate(readings):
-            if r > LIDAR_SENSOR_MAX_RANGE * 0.6:
+            if r > LIDAR_SENSOR_MAX_RANGE * 0.6: #the multiplier is there because things get fuzzy at the end of the range
                 continue
             alpha = lidar_offsets[i] + pose_theta
+
+            #Detected object's offset from the robot
             ox = -math.cos(alpha) * r
-            oy = math.sin(alpha) * r
+            oy =  math.sin(alpha) * r
+
+            #Draw object on the map
             mx, my = convert_to_map(ox + pose_x, oy + pose_y)
             val = map[mx, my] + 0.03
             map[mx, my] = min(val, 1.0)
+
+            #Draw object in white if fully detected, or a shade of blue if partially detected
             display.setColor(0xFFFFFF if map[mx, my] >= 1.0 else int(map[mx, my]*255))
             display.drawPixel(mx, my)
 
@@ -330,5 +348,6 @@ while robot.step(timestep) != -1:
         robot_parts["gripper_right_finger_joint"].setPosition(0.045)
         if left_gripper_enc.getValue()>=0.044:
             gripper_status="open"
+
     # update for next frame
     pose_x_last, pose_y_last = pose_x, pose_y
