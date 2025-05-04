@@ -85,7 +85,8 @@ current_portion= PORTIONS-1
 
 # ---------------------------------------------------------------------------
 # MATH HELPERS
-# ---------------------------------------------------------------------------
+# # ---------------------------------------------------------------------------
+
 def convert_to_map(px, py):
     mx = MAP_WIDTH  - (MAP_WIDTH /(2*WORLD_HEIGHT)) * (py + WORLD_HEIGHT)
     my = MAP_HEIGHT - (MAP_HEIGHT/(2*WORLD_WIDTH )) * (px + WORLD_WIDTH)
@@ -154,8 +155,8 @@ while robot.step(timestep)!=-1:
     display.setColor(0x0088FF); display.drawPixel(map_x,map_y)
 
     key=keyboard.getKey()
-    if key==ord('M'): mode="mapping"; waypoints.clear(); print("Switched to MAPPING mode")
-    elif key==ord('A'): mode="autonomous"; waypoints.clear(); print("Switched to AUTONOMOUS mode")
+    if key==ord('M'): mode="mapping";    waypoints.clear(); print("Switched to MAPPING mode")
+    if key==ord('A'): mode="autonomous"; waypoints.clear(); print("Switched to AUTONOMOUS mode")
 
     # -----------------------------------------------------------------------
     # MAPPING MODE (unchanged)
@@ -199,24 +200,29 @@ while robot.step(timestep)!=-1:
         tx,ty    = waypoints[0]
         dx,dy    = tx-map_x, ty-map_y
         dist_pix = math.hypot(dx,dy)
-        target_theta=math.atan2(dy,dx)
+        target_theta=(math.atan2(dy,dx)+3*math.pi/2)%(2*math.pi)
         err=((target_theta - pose_theta + math.pi)%(2*math.pi))-math.pi
 
         wp_idx=path_len-len(waypoints)+1
         print(f"[{wp_idx:02d}/{path_len}] pose=({map_x:3d},{map_y:3d}) θ={pose_theta:+.2f} | "
-              f"wp=({tx},{ty}) dist={dist_pix:5.1f}px err={err:+.2f}")
+              f"wp=({tx},{ty}) θ={target_theta:+.2f}, dist={dist_pix:5.1f}px, err={err:+.2f}")
 
         close_px     = 10
         max_v        = MAX_SPEED/3
-        heading_tol = 0.02          # ≈1.7°
+        heading_tol = 0.05          # 0.05≈4.3°
         Kp          = 8.0           # turn gain
         
         if abs(err) > heading_tol:          # keep turning in place
             v_cmd = 0.0                     # no forward motion
             omega = -Kp * math.copysign(1.0, err)   # constant‑speed turn
+
+            #Turn slower when almost aiming the right way
+            if abs(err) < 0.05:
+                omega *= 0.4
         else:                               # aligned → drive forward
             v_cmd = max_v
             omega = 0.0                     # stop turning
+
         
         # wheel speeds
         vL = v_cmd - omega * AXLE_LENGTH/2
