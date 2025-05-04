@@ -131,6 +131,7 @@ def get_random_valid_vertex_far(sx, sy, min_dist=MIN_GOAL_DIST):
     return get_random_valid_vertex()
 
 def get_nearest_vertex(nodes,pt): return min(nodes,key=lambda n:np.linalg.norm(pt-n.point))
+
 def steer(m,p_from,p_to,delta):
     while True:
         dist=np.linalg.norm(p_to-p_from)
@@ -170,7 +171,6 @@ def find_nearest_location(m, sx, sy):
                 queue.append((nx, ny))
 
     return [sx, sy]
-
 
 def rrtstar(m, sx, sy, ex, ey, reps, delta, gp, draw_all, draw_path, print_wp):
     # ensure start in free space
@@ -240,97 +240,97 @@ while robot.step(timestep)!=-1:
     # -----------------------------------------------------------------------
     # MAPPING MODE (unchanged)
     # -----------------------------------------------------------------------
-    if mode=="mapping":
-        vL=vR=MAX_SPEED/2
-        current_frame+=1
-        if current_frame>=FRAMES_BETWEEN_UPDATES:
-            current_frame=0; current_portion=(current_portion+1)%PORTIONS
-            if current_portion==0:
-                if DRAW_COLLISION==1:
-                    display.setColor(0x008F00)
-                    for x in range(MAP_WIDTH):
-                        for y in range(MAP_HEIGHT):
-                            if collision_map[x,y]==1: display.drawPixel(x,y)
-                gx, gy = get_random_valid_vertex_far(map_x, map_y)
-                waypoints=rrtstar(collision_map,map_x,map_y,gx,gy,
-                                   REPS,DELTA_Q,GOAL_PERCENT,0,1,1)
-            start=current_portion*math.ceil(MAP_HEIGHT/PORTIONS)
-            end=min(MAP_HEIGHT,start+math.ceil(MAP_HEIGHT/PORTIONS))
-            for x in range(MAP_WIDTH):
-                for y in range(start,end):
-                    if map[x,y]==1:
-                        for dx in range(-BUFFER,BUFFER+1):
-                            for dy in range(-BUFFER,BUFFER+1):
-                                xi,yi=x+dx,y+dy
-                                if 0<=xi<MAP_WIDTH and 0<=yi<MAP_HEIGHT:
-                                    collision_map[xi,yi]=1
-                    else:
-                        display.setColor(0x000000); display.drawPixel(x,y)
+    # if mode=="mapping":
+    vL=vR=MAX_SPEED/2
+    current_frame+=1
+    if current_frame>=FRAMES_BETWEEN_UPDATES:
+        current_frame=0; current_portion=(current_portion+1)%PORTIONS
+        if current_portion==0:
+            if DRAW_COLLISION==1:
+                display.setColor(0x008F00)
+                for x in range(MAP_WIDTH):
+                    for y in range(MAP_HEIGHT):
+                        if collision_map[x,y]==1: display.drawPixel(x,y)
+        start=current_portion*math.ceil(MAP_HEIGHT/PORTIONS)
+        end=min(MAP_HEIGHT,start+math.ceil(MAP_HEIGHT/PORTIONS))
+        for x in range(MAP_WIDTH):
+            for y in range(start,end):
+                if map[x,y]==1:
+                    for dx in range(-BUFFER,BUFFER+1):
+                        for dy in range(-BUFFER,BUFFER+1):
+                            xi,yi=x+dx,y+dy
+                            if 0<=xi<MAP_WIDTH and 0<=yi<MAP_HEIGHT:
+                                collision_map[xi,yi]=1
+                else:
+                    display.setColor(0x000000); display.drawPixel(x,y)
+        display.setColor(0x60FF40)
+        for wp in waypoints:
+            display.drawPixel(wp[0],wp[1])
 
     # -----------------------------------------------------------------------
     # AUTONOMOUS MODE
     # -----------------------------------------------------------------------
-    elif mode == "autonomous":
+    # elif mode == "autonomous":
 
-        # 1) need a path? -------------------------------------------------
-        if not waypoints:
-            gx, gy = get_random_valid_vertex_far(map_x, map_y)
+    # 1) need a path? -------------------------------------------------
+    if not waypoints:
+        gx, gy = get_random_valid_vertex_far(map_x, map_y)
+        waypoints = rrtstar(collision_map, map_x, map_y,
+                            gx, gy, REPS, DELTA_Q, GOAL_PERCENT,
+                            0, 1, 1)
+        path_len = len(waypoints)
+
+    # 2) test current leg for collision ------------------------------
+    if waypoints:
+        tx, ty = waypoints[0]
+        if path_blocked(map_x, map_y, tx, ty, map): 
+            print("⟳ path blocked – replanning")
+            gx, gy = get_random_valid_vertex_far(map_x, map_y)          # keep same final goal
             waypoints = rrtstar(collision_map, map_x, map_y,
                                 gx, gy, REPS, DELTA_Q, GOAL_PERCENT,
                                 0, 1, 1)
             path_len = len(waypoints)
-    
-        # 2) test current leg for collision ------------------------------
-        if waypoints:
-            tx, ty = waypoints[0]
-            if path_blocked(map_x, map_y, tx, ty, map): 
-                print("⟳ path blocked – replanning")
-                gx, gy = get_random_valid_vertex_far(map_x, map_y)          # keep same final goal
-                waypoints = rrtstar(collision_map, map_x, map_y,
-                                    gx, gy, REPS, DELTA_Q, GOAL_PERCENT,
-                                    0, 1, 1)
-                path_len = len(waypoints)
-            tx, ty = waypoints[0]
-    
-        # 3) drive toward first waypoint --------------------------------
         tx, ty = waypoints[0]
-        dx, dy    = tx - map_x, ty - map_y
-        dist_pix  = math.hypot(dx, dy)
-        target_theta = (math.atan2(dy, dx) + 3*math.pi/2) % (2*math.pi)
-        err = ((target_theta - pose_theta + math.pi) % (2*math.pi)) - math.pi
-    
-        wp_idx = path_len - len(waypoints) + 1
-        print(f"[{wp_idx:02d}/{path_len}] pose=({map_x:3d},{map_y:3d}) θ={pose_theta:+.2f} | "
-              f"wp=({tx},{ty}) θ={target_theta:+.2f}, dist={dist_pix:5.1f}px, err={err:+.2f}")
-    
-        close_px  = 10
-        max_v     = MAX_SPEED / 3
-        heading_tol = 0.05
-        Kp        = 8.0
-    
-        if abs(err) > heading_tol:
-            v_cmd = 0.0
-            omega = -Kp * math.copysign(1.0, err)
-            if abs(err) < 0.05:
-                omega *= 0.4
-        else:
-            v_cmd = max_v
-            omega = 0.0
-    
-        vL = v_cmd - omega * AXLE_LENGTH / 2
-        vR = v_cmd + omega * AXLE_LENGTH / 2
-    
-        # clamp wheel speeds
-        ml = robot_parts["wheel_left_joint"].getMaxVelocity()
-        mr = robot_parts["wheel_right_joint"].getMaxVelocity()
-        scale = max(abs(vL)/ml, abs(vR)/mr, 1.0)
-        vL /= scale; vR /= scale
-    
-        # waypoint reached?
-        if dist_pix < close_px:
-            print(f"✔ reached waypoint {wp_idx} ({tx},{ty})")
-            waypoints.pop(0)
-            vL = vR = 0.0
+
+    # 3) drive toward first waypoint --------------------------------
+    tx, ty = waypoints[0]
+    dx, dy    = tx - map_x, ty - map_y
+    dist_pix  = math.hypot(dx, dy)
+    target_theta = (math.atan2(dy, dx) + 3*math.pi/2) % (2*math.pi)
+    err = ((target_theta - pose_theta + math.pi) % (2*math.pi)) - math.pi
+
+    wp_idx = path_len - len(waypoints) + 1
+    print(f"[{wp_idx:02d}/{path_len}] pose=({map_x:3d},{map_y:3d}) θ={pose_theta:+.2f} | "
+            f"wp=({tx},{ty}) θ={target_theta:+.2f}, dist={dist_pix:5.1f}px, err={err:+.2f}")
+
+    close_px  = 10
+    max_v     = MAX_SPEED * 0.6
+    heading_tol = 0.08
+    Kp        = 8.0
+
+    if abs(err) > heading_tol:
+        v_cmd = 0.0
+        omega = -Kp * math.copysign(1.0, err)
+        if abs(err) < 0.15:
+            omega *= 0.4
+    else:
+        v_cmd = max_v
+        omega = 0.0
+
+    vL = v_cmd - omega * AXLE_LENGTH / 2
+    vR = v_cmd + omega * AXLE_LENGTH / 2
+
+    # clamp wheel speeds
+    ml = robot_parts["wheel_left_joint"].getMaxVelocity()
+    mr = robot_parts["wheel_right_joint"].getMaxVelocity()
+    scale = max(abs(vL)/ml, abs(vR)/mr, 1.0)
+    vL /= scale; vR /= scale
+
+    # waypoint reached?
+    if dist_pix < close_px:
+        print(f"✔ reached waypoint {wp_idx} ({tx},{ty})")
+        waypoints.pop(0)
+        vL = vR = 0.0
 
     # -----------------------------------------------------------------------
     # LIDAR MAPPING (unchanged)
@@ -339,11 +339,11 @@ while robot.step(timestep)!=-1:
     if speed>0.005:
         readings=lidar.getRangeImage()[83:-83]
         for i,r in enumerate(readings):
-            if r>LIDAR_SENSOR_MAX_RANGE*0.6: continue
+            if r>LIDAR_SENSOR_MAX_RANGE*0.5: continue
             alpha=lidar_offsets[i]+pose_theta
             ox=-math.cos(alpha)*r; oy=math.sin(alpha)*r
             mx,my=convert_to_map(ox+pose_x,oy+pose_y)
-            map[mx,my]=min(map[mx,my]+0.03,1.0)
+            map[mx,my]=min(map[mx,my]+0.025,1.0)
             if map[mx,my]>=0.2:
                 for dx in range(-BUFFER,BUFFER+1):
                     for dy in range(-BUFFER,BUFFER+1):
