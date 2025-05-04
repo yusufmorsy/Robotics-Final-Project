@@ -4,6 +4,7 @@
 
 from controller import Robot
 import math, random, numpy as np, collections
+from math import hypot
 from collections import deque
 import collections
 
@@ -38,8 +39,6 @@ lidar_offsets      = np.linspace(-LIDAR_ANGLE_RANGE/2, LIDAR_ANGLE_RANGE/2, LIDA
 FRAMES_BETWEEN_UPDATES = 5
 PORTIONS              = 36
 BUFFER                = 7
-
-MIN_GOAL_DIST   = max(MAP_WIDTH, MAP_HEIGHT) * 1
 
 # ---------------------------------------------------------------------------
 # ROBOT DEVICES
@@ -122,13 +121,22 @@ def get_random_valid_vertex(_unused=None):          # ← accept a dummy arg
     collision_map.fill(0)
     return get_random_valid_vertex()
 
+MIN_GOAL_DIST = hypot(MAP_WIDTH, MAP_HEIGHT) * 0.7  
+
 def get_random_valid_vertex_far(sx, sy, min_dist=MIN_GOAL_DIST):
+    best = None
+    best_d = 0.0
     for _ in range(5000):
         x, y = get_random_valid_vertex()
-        if math.hypot(x - sx, y - sy) >= min_dist:
-            return [x, y]
-    # fallback to standard if none found
-    return get_random_valid_vertex()
+        d = hypot(x - sx, y - sy)
+        if d >= min_dist:
+            return [x, y]       # we hit “far”!
+        if d > best_d:
+            best_d = d
+            best   = [x, y]
+    # no perfect hit—use the farthest point we saw
+    print(f"⚠ no vertex ≥{min_dist:.1f}px; using farthest at {best_d:.1f}px")
+    return best
 
 def get_nearest_vertex(nodes,pt): return min(nodes,key=lambda n:np.linalg.norm(pt-n.point))
 
