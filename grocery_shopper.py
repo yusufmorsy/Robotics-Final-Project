@@ -39,6 +39,8 @@ FRAMES_BETWEEN_UPDATES = 5
 PORTIONS              = 36
 BUFFER                = 7
 
+MIN_GOAL_DIST   = max(MAP_WIDTH, MAP_HEIGHT) * 1
+
 # ---------------------------------------------------------------------------
 # ROBOT DEVICES
 # ---------------------------------------------------------------------------
@@ -119,7 +121,15 @@ def get_random_valid_vertex(_unused=None):          # ← accept a dummy arg
     print("⚠︎  map saturated – clearing old inflation")
     collision_map.fill(0)
     return get_random_valid_vertex()
-    
+
+def get_random_valid_vertex_far(sx, sy, min_dist=MIN_GOAL_DIST):
+    for _ in range(5000):
+        x, y = get_random_valid_vertex()
+        if math.hypot(x - sx, y - sy) >= min_dist:
+            return [x, y]
+    # fallback to standard if none found
+    return get_random_valid_vertex()
+
 def get_nearest_vertex(nodes,pt): return min(nodes,key=lambda n:np.linalg.norm(pt-n.point))
 def steer(m,p_from,p_to,delta):
     while True:
@@ -137,6 +147,7 @@ def steer(m,p_from,p_to,delta):
                 p_to=(p_to-p_from)*((i)/11)+p_from
                 break
     return path
+    
 def find_nearest_location(m, sx, sy):
     """
     Locate the nearest free cell (value 0) in m using BFS starting from (sx, sy).
@@ -162,7 +173,7 @@ def find_nearest_location(m, sx, sy):
 
 
 def rrtstar(m, sx, sy, ex, ey, reps, delta, gp, draw_all, draw_path, print_wp):
-    # ensure start is in free space
+    # ensure start in free space
     if m[sx, sy] == 1:
         sx, sy = find_nearest_location(m, sx, sy)
 
@@ -178,6 +189,7 @@ def rrtstar(m, sx, sy, ex, ey, reps, delta, gp, draw_all, draw_path, print_wp):
         if np.linalg.norm(new_node.point - [ex, ey]) < 1e-5:
             break
 
+    # trace back
     node = nodes[-1]
     while node:
         if draw_path:
@@ -192,6 +204,7 @@ def rrtstar(m, sx, sy, ex, ey, reps, delta, gp, draw_all, draw_path, print_wp):
         print("Waypoints:", wpt)
     np.save("path.npy", wpt)
     return wpt
+
 
 def path_blocked(px, py, qx, qy, occ_grid, thresh=0.99):
     """
@@ -238,7 +251,7 @@ while robot.step(timestep)!=-1:
                     for x in range(MAP_WIDTH):
                         for y in range(MAP_HEIGHT):
                             if collision_map[x,y]==1: display.drawPixel(x,y)
-                gx,gy=get_random_valid_vertex()
+                gx, gy = get_random_valid_vertex_far(map_x, map_y)
                 waypoints=rrtstar(collision_map,map_x,map_y,gx,gy,
                                    REPS,DELTA_Q,GOAL_PERCENT,0,1,1)
             start=current_portion*math.ceil(MAP_HEIGHT/PORTIONS)
@@ -261,7 +274,7 @@ while robot.step(timestep)!=-1:
 
         # 1) need a path? -------------------------------------------------
         if not waypoints:
-            gx, gy = get_random_valid_vertex()
+            gx, gy = get_random_valid_vertex_far(map_x, map_y)
             waypoints = rrtstar(collision_map, map_x, map_y,
                                 gx, gy, REPS, DELTA_Q, GOAL_PERCENT,
                                 0, 1, 1)
@@ -272,7 +285,7 @@ while robot.step(timestep)!=-1:
             tx, ty = waypoints[0]
             if path_blocked(map_x, map_y, tx, ty, map): 
                 print("⟳ path blocked – replanning")
-                gx, gy = waypoints[-1]          # keep same final goal
+                gx, gy = get_random_valid_vertex_far(map_x, map_y)          # keep same final goal
                 waypoints = rrtstar(collision_map, map_x, map_y,
                                     gx, gy, REPS, DELTA_Q, GOAL_PERCENT,
                                     0, 1, 1)
