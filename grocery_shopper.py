@@ -5,6 +5,7 @@
 from controller import Robot
 import math, random, numpy as np, collections
 from collections import deque
+import collections
 
 # Initialization
 print("=== Initializing Grocery Shopper...")
@@ -20,7 +21,7 @@ MOTOR_LEFT      = 10
 MOTOR_RIGHT     = 11
 N_PARTS         = 12
 
-REPS            = 500
+REPS            = 100
 DELTA_Q         = 10
 GOAL_PERCENT    = 0.05
 
@@ -104,10 +105,21 @@ def convert_to_world(mx, my):
 class Node:
     def __init__(self, pt, parent=None, path_length=0):
         self.point=pt; self.parent=parent; self.path_from_parent=[]; self.path_length=path_length
-def get_random_valid_vertex(m):
-    while True:
-        x,y=np.random.randint(MAP_WIDTH),np.random.randint(MAP_HEIGHT)
-        if m[x,y]==0: return [x,y]
+def get_random_valid_vertex(_unused=None):          # ← accept a dummy arg
+    """Return (x,y) that is currently free in the occupancy grid."""
+    tries = 0
+    while tries < 5000:
+        x = np.random.randint(MAP_WIDTH)
+        y = np.random.randint(MAP_HEIGHT)
+        if map[x, y] < 0.20 and collision_map[x, y] == 0:
+            return [x, y]
+        tries += 1
+
+    # fallback: clear inflation layer and try again
+    print("⚠︎  map saturated – clearing old inflation")
+    collision_map.fill(0)
+    return get_random_valid_vertex()
+    
 def get_nearest_vertex(nodes,pt): return min(nodes,key=lambda n:np.linalg.norm(pt-n.point))
 def steer(m,p_from,p_to,delta):
     while True:
@@ -125,48 +137,78 @@ def steer(m,p_from,p_to,delta):
                 p_to=(p_to-p_from)*((i)/11)+p_from
                 break
     return path
-def find_nearest_location(m,sx,sy):
+def find_nearest_location(m, sx, sy):
+    """
+    Locate the nearest free cell (value 0) in m using BFS starting from (sx, sy).
+    """
     visited = set()
-    queue = deque(sx,sy)
-    visited.add(sx,sy)
-    
-    while queue:
-        cur_x = queue.popleft()
-        cur_y = queue.popleft()
+    queue = deque()
+    queue.append((sx, sy))
+    visited.add((sx, sy))
 
-        if (cur_x-1, cur_y) not in visited:
-            visited.add((cur_x-1, cur_y)); queue.append(cur_x-1); queue.append(cur_y)
-        if (cur_x+1, cur_y) not in visited:
-            visited.add((cur_x+1, cur_y)); queue.append(cur_x+1); queue.append(cur_y)
-        if (cur_x, cur_y-1) not in visited:
-            visited.add((cur_x, cur_y-1)); queue.append(cur_x); queue.append(cur_y-1)
-        if (cur_x, cur_y+1) not in visited:
-            visited.add((cur_x, cur_y+1)); queue.append(cur_x); queue.append(cur_y+1)
+    while queue:
+        cur_x, cur_y = queue.popleft()
 
         if m[cur_x, cur_y] == 0:
             return [cur_x, cur_y]
+
+        for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+            nx, ny = cur_x + dx, cur_y + dy
+            if 0 <= nx < MAP_WIDTH and 0 <= ny < MAP_HEIGHT and (nx, ny) not in visited:
+                visited.add((nx, ny))
+                queue.append((nx, ny))
+
     return [sx, sy]
-def rrtstar(m,sx,sy,ex,ey,reps,delta,gp,draw_all,draw_path,print_wp):
-    if m[sx,sy] == 1:
-        sx,sy = find_nearest_location(m[:],sx,sy)
-    nodes=[Node(np.array([sx,sy]))]; wpt=[]
+
+
+def rrtstar(m, sx, sy, ex, ey, reps, delta, gp, draw_all, draw_path, print_wp):
+    # ensure start is in free space
+    if m[sx, sy] == 1:
+        sx, sy = find_nearest_location(m, sx, sy)
+
+    nodes = [Node(np.array([sx, sy]))]
+    wpt   = []
     for _ in range(reps):
-        new_pt=np.array([ex,ey]) if random.random()<gp else np.array(get_random_valid_vertex(m))
-        parent=get_nearest_vertex(nodes,new_pt)
-        path=steer(m,parent.point,new_pt,delta)
-        new_node=Node(path[-1],parent,parent.path_length+np.linalg.norm(path[-1]-parent.point))
-        new_node.path_from_parent=path; nodes.append(new_node)
-        if np.linalg.norm(new_node.point-[ex,ey])<1e-5: break
-    node=nodes[-1]
+        new_pt = np.array([ex, ey]) if random.random() < gp else np.array(get_random_valid_vertex(m))
+        parent = get_nearest_vertex(nodes, new_pt)
+        path   = steer(m, parent.point, new_pt, delta)
+        new_node = Node(path[-1], parent, parent.path_length + np.linalg.norm(path[-1] - parent.point))
+        new_node.path_from_parent = path
+        nodes.append(new_node)
+        if np.linalg.norm(new_node.point - [ex, ey]) < 1e-5:
+            break
+
+    node = nodes[-1]
     while node:
         if draw_path:
             display.setColor(0x60FF40)
-            for pt in node.path_from_parent: display.drawPixel(round(pt[0]),round(pt[1]))
-            display.drawPixel(round(node.point[0]),round(node.point[1]))
-        wpt.insert(0,(int(node.point[0]),int(node.point[1]))); node=node.parent
-    if print_wp: print("Waypoints:",wpt)
-    np.save("path.npy",wpt)
+            for pt in node.path_from_parent:
+                display.drawPixel(round(pt[0]), round(pt[1]))
+            display.drawPixel(round(node.point[0]), round(node.point[1]))
+        wpt.insert(0, (int(node.point[0]), int(node.point[1])))
+        node = node.parent
+
+    if print_wp:
+        print("Waypoints:", wpt)
+    np.save("path.npy", wpt)
     return wpt
+
+def path_blocked(px, py, qx, qy, occ_grid, thresh=0.99):
+    """
+    occ_grid : reference to the main 'map' array (not 'collision_map').
+    thresh   : occupancy probability above which a pixel is treated as solid.
+    """
+    dx, dy = qx - px, qy - py
+    steps  = int(max(abs(dx), abs(dy)))
+    if steps == 0:                       # zero‑length segment
+        return occ_grid[px, py] >= thresh
+
+    for i in range(steps + 1):
+        x = int(round(px + dx * i / steps))
+        y = int(round(py + dy * i / steps))
+        if occ_grid[x, y] >= thresh:     # only “white” pixels block
+            return True
+    return False
 
 # ---------------------------------------------------------------------------
 # MAIN LOOP
@@ -196,7 +238,7 @@ while robot.step(timestep)!=-1:
                     for x in range(MAP_WIDTH):
                         for y in range(MAP_HEIGHT):
                             if collision_map[x,y]==1: display.drawPixel(x,y)
-                gx,gy=get_random_valid_vertex(collision_map)
+                gx,gy=get_random_valid_vertex()
                 waypoints=rrtstar(collision_map,map_x,map_y,gx,gy,
                                    REPS,DELTA_Q,GOAL_PERCENT,0,1,1)
             start=current_portion*math.ceil(MAP_HEIGHT/PORTIONS)
@@ -215,52 +257,67 @@ while robot.step(timestep)!=-1:
     # -----------------------------------------------------------------------
     # AUTONOMOUS MODE
     # -----------------------------------------------------------------------
-    elif mode=="autonomous":
-        if not waypoints:
-            gx,gy=get_random_valid_vertex(collision_map)
-            waypoints=rrtstar(collision_map,map_x,map_y,gx,gy,
-                               REPS,DELTA_Q,GOAL_PERCENT,0,1,1)
-            path_len=len(waypoints)
-        tx,ty    = waypoints[0]
-        dx,dy    = tx-map_x, ty-map_y
-        dist_pix = math.hypot(dx,dy)
-        target_theta=(math.atan2(dy,dx)+3*math.pi/2)%(2*math.pi)
-        err=((target_theta - pose_theta + math.pi)%(2*math.pi))-math.pi
+    elif mode == "autonomous":
 
-        wp_idx=path_len-len(waypoints)+1
+        # 1) need a path? -------------------------------------------------
+        if not waypoints:
+            gx, gy = get_random_valid_vertex()
+            waypoints = rrtstar(collision_map, map_x, map_y,
+                                gx, gy, REPS, DELTA_Q, GOAL_PERCENT,
+                                0, 1, 1)
+            path_len = len(waypoints)
+    
+        # 2) test current leg for collision ------------------------------
+        if waypoints:
+            tx, ty = waypoints[0]
+            if path_blocked(map_x, map_y, tx, ty, map): 
+                print("⟳ path blocked – replanning")
+                gx, gy = waypoints[-1]          # keep same final goal
+                waypoints = rrtstar(collision_map, map_x, map_y,
+                                    gx, gy, REPS, DELTA_Q, GOAL_PERCENT,
+                                    0, 1, 1)
+                path_len = len(waypoints)
+            tx, ty = waypoints[0]
+    
+        # 3) drive toward first waypoint --------------------------------
+        tx, ty = waypoints[0]
+        dx, dy    = tx - map_x, ty - map_y
+        dist_pix  = math.hypot(dx, dy)
+        target_theta = (math.atan2(dy, dx) + 3*math.pi/2) % (2*math.pi)
+        err = ((target_theta - pose_theta + math.pi) % (2*math.pi)) - math.pi
+    
+        wp_idx = path_len - len(waypoints) + 1
         print(f"[{wp_idx:02d}/{path_len}] pose=({map_x:3d},{map_y:3d}) θ={pose_theta:+.2f} | "
               f"wp=({tx},{ty}) θ={target_theta:+.2f}, dist={dist_pix:5.1f}px, err={err:+.2f}")
-
-        close_px     = 10
-        max_v        = MAX_SPEED/3
-        heading_tol = 0.05          # 0.05≈4.3°
-        Kp          = 8.0           # turn gain
-        
-        if abs(err) > heading_tol:          # keep turning in place
-            v_cmd = 0.0                     # no forward motion
-            omega = -Kp * math.copysign(1.0, err)   # constant‑speed turn
-
-            #Turn slower when almost aiming the right way
-            if abs(err) < 0.10:
+    
+        close_px  = 10
+        max_v     = MAX_SPEED / 3
+        heading_tol = 0.05
+        Kp        = 8.0
+    
+        if abs(err) > heading_tol:
+            v_cmd = 0.0
+            omega = -Kp * math.copysign(1.0, err)
+            if abs(err) < 0.05:
                 omega *= 0.4
-        else:                               # aligned → drive forward
+        else:
             v_cmd = max_v
-            omega = 0.0                     # stop turning
-
-        
-        # wheel speeds
-        vL = v_cmd - omega * AXLE_LENGTH/2
-        vR = v_cmd + omega * AXLE_LENGTH/2
-
-        # limit to motor capabilities
+            omega = 0.0
+    
+        vL = v_cmd - omega * AXLE_LENGTH / 2
+        vR = v_cmd + omega * AXLE_LENGTH / 2
+    
+        # clamp wheel speeds
         ml = robot_parts["wheel_left_joint"].getMaxVelocity()
         mr = robot_parts["wheel_right_joint"].getMaxVelocity()
         scale = max(abs(vL)/ml, abs(vR)/mr, 1.0)
         vL /= scale; vR /= scale
-
+    
+        # waypoint reached?
         if dist_pix < close_px:
             print(f"✔ reached waypoint {wp_idx} ({tx},{ty})")
-            waypoints.pop(0); vL=vR=0.0
+            waypoints.pop(0)
+            vL = vR = 0.0
 
     # -----------------------------------------------------------------------
     # LIDAR MAPPING (unchanged)
