@@ -7,6 +7,7 @@ import math, random, numpy as np, collections
 from math import hypot
 from collections import deque
 import collections
+from time import sleep 
 
 # Initialization
 print("=== Initializing Grocery Shopper...")
@@ -76,7 +77,7 @@ display = robot.getDevice("display")
 # STATE
 # ---------------------------------------------------------------------------
 pose_x = pose_y = pose_theta = pose_x_last = pose_y_last = 0.0
-mode            = "autonomous"
+mode            = "shopping"
 waypoints       = []
 gripper_status  = "closed"
 
@@ -248,110 +249,247 @@ def path_blocked(px, py, qx, qy, occ_grid, thresh=0.99):
 # MAIN LOOP
 # ---------------------------------------------------------------------------
 path_len=0
+
+waypoints = []  # Initialize waypoints list
+shopping_waypoints = []  # For storing shopping path waypoints
+current_shopping_goal = 0  # Index of current shopping waypoint
+next_shopping_goal = 1  # Index of next shopping waypoint
+shopping_completed = False  # Flag to check shopping completion
+shopping_started = False  # Flag to indicate if shopping routine has started
+
 while robot.step(timestep)!=-1:
     pose_x,pose_y=gps.getValues()[0],gps.getValues()[1]
     map_x,map_y=convert_to_map(pose_x,pose_y)
-    n=compass.getValues(); pose_theta=math.pi-math.atan2(n[0],n[1])
-    display.setColor(0x0088FF); display.drawPixel(map_x,map_y)
+    n=compass.getValues()
+    pose_theta=math.pi-math.atan2(n[0],n[1])
+    display.setColor(0x0088FF)
+    display.drawPixel(map_x,map_y)
 
     key=keyboard.getKey()
-    if key==ord('M'): mode="mapping";    waypoints.clear(); print("Switched to MAPPING mode")
-    if key==ord('A'): mode="autonomous"; waypoints.clear(); print("Switched to AUTONOMOUS mode")
+    if key==ord('M'): 
+        mode="mapping"
+        waypoints.clear()
+        print("Switched to MAPPING mode")
+    if key==ord('A'): 
+        mode="autonomous"
+        waypoints.clear()
+        print("Switched to AUTONOMOUS mode")
+    if key==ord('S'):
+        mode="shopping"
+        # Generate shopping path from ITEMS_WORLD coordinates
+        if not shopping_waypoints:
+            # Start at current position
+            start_w = [[pose_x, pose_y]]
+            # Add all item positions
+            for point in ITEMS_WORLD:
+                start_w.append(point)
+            
+            # Create sequential path through all items
+            shopping_waypoints = []
+            for i in range(len(start_w) - 1):
+                # Could use A* here, but for simplicity directly connecting points
+                shopping_waypoints.append(start_w[i+1])
+            
+            print(f"Shopping path created with {len(shopping_waypoints)} waypoints")
+            current_shopping_goal = 0
+            next_shopping_goal = min(1, len(shopping_waypoints) - 1)
+            shopping_completed = False
+            shopping_started = False
+        print("Switched to SHOPPING mode")
 
     # -----------------------------------------------------------------------
     # MAPPING MODE (unchanged)
     # -----------------------------------------------------------------------
-    # if mode=="mapping":
-    vL=vR=MAX_SPEED/2
-    current_frame+=1
-    if current_frame>=FRAMES_BETWEEN_UPDATES:
-        current_frame=0; current_portion=(current_portion+1)%PORTIONS
-        if current_portion==0:
-            if DRAW_COLLISION==1:
-                display.setColor(0x008F00)
-                for x in range(MAP_WIDTH):
-                    for y in range(MAP_HEIGHT):
-                        if collision_map[x,y]==1: display.drawPixel(x,y)
-        start=current_portion*math.ceil(MAP_HEIGHT/PORTIONS)
-        end=min(MAP_HEIGHT,start+math.ceil(MAP_HEIGHT/PORTIONS))
-        for x in range(MAP_WIDTH):
-            for y in range(start,end):
-                if map[x,y]==1:
-                    for dx in range(-BUFFER,BUFFER+1):
-                        for dy in range(-BUFFER,BUFFER+1):
-                            xi,yi=x+dx,y+dy
-                            if 0<=xi<MAP_WIDTH and 0<=yi<MAP_HEIGHT:
-                                collision_map[xi,yi]=1
-                else:
-                    display.setColor(0x000000); display.drawPixel(x,y)
-        display.setColor(0x60FF40)
-        for wp in waypoints:
-            display.drawPixel(wp[0],wp[1])
+    if mode=="mapping":
+        vL=vR=MAX_SPEED/2
+        current_frame+=1
+        if current_frame>=FRAMES_BETWEEN_UPDATES:
+            current_frame=0; current_portion=(current_portion+1)%PORTIONS
+            if current_portion==0:
+                if DRAW_COLLISION==1:
+                    display.setColor(0x008F00)
+                    for x in range(MAP_WIDTH):
+                        for y in range(MAP_HEIGHT):
+                            if collision_map[x,y]==1: display.drawPixel(x,y)
+            start=current_portion*math.ceil(MAP_HEIGHT/PORTIONS)
+            end=min(MAP_HEIGHT,start+math.ceil(MAP_HEIGHT/PORTIONS))
+            for x in range(MAP_WIDTH):
+                for y in range(start,end):
+                    if map[x,y]==1:
+                        for dx in range(-BUFFER,BUFFER+1):
+                            for dy in range(-BUFFER,BUFFER+1):
+                                xi,yi=x+dx,y+dy
+                                if 0<=xi<MAP_WIDTH and 0<=yi<MAP_HEIGHT:
+                                    collision_map[xi,yi]=1
+                    else:
+                        display.setColor(0x000000); display.drawPixel(x,y)
+            display.setColor(0x60FF40)
+            for wp in waypoints:
+                display.drawPixel(wp[0],wp[1])
 
     # -----------------------------------------------------------------------
     # AUTONOMOUS MODE
     # -----------------------------------------------------------------------
-    # elif mode == "autonomous":
-
-    # 1) need a path? -------------------------------------------------
-    if not waypoints:
-        gx, gy = get_random_valid_vertex_far(map_x, map_y)
-        waypoints = rrtstar(collision_map, map_x, map_y,
-                            gx, gy, REPS, DELTA_Q, GOAL_PERCENT,
-                            0, 1, 1)
-        path_len = len(waypoints)
-
-    # 2) test current leg for collision ------------------------------
-    if waypoints:
-        tx, ty = waypoints[0]
-        if path_blocked(map_x, map_y, tx, ty, map): 
-            print("⟳ path blocked – replanning")
-            gx, gy = get_random_valid_vertex_far(map_x, map_y)          # keep same final goal
+    elif mode == "autonomous":
+        # 1) need a path? -------------------------------------------------
+        if not waypoints:
+            gx, gy = get_random_valid_vertex_far(map_x, map_y)
             waypoints = rrtstar(collision_map, map_x, map_y,
                                 gx, gy, REPS, DELTA_Q, GOAL_PERCENT,
                                 0, 1, 1)
             path_len = len(waypoints)
+
+        # 2) test current leg for collision ------------------------------
+        if waypoints:
+            tx, ty = waypoints[0]
+            if path_blocked(map_x, map_y, tx, ty, map): 
+                print("⟳ path blocked – replanning")
+                gx, gy = get_random_valid_vertex_far(map_x, map_y)          # keep same final goal
+                waypoints = rrtstar(collision_map, map_x, map_y,
+                                    gx, gy, REPS, DELTA_Q, GOAL_PERCENT,
+                                    0, 1, 1)
+                path_len = len(waypoints)
+            tx, ty = waypoints[0]
+
+        # 3) drive toward first waypoint --------------------------------
         tx, ty = waypoints[0]
+        dx, dy    = tx - map_x, ty - map_y
+        dist_pix  = math.hypot(dx, dy)
+        target_theta = (math.atan2(dy, dx) + 3*math.pi/2) % (2*math.pi)
+        err = ((target_theta - pose_theta + math.pi) % (2*math.pi)) - math.pi
 
-    # 3) drive toward first waypoint --------------------------------
-    tx, ty = waypoints[0]
-    dx, dy    = tx - map_x, ty - map_y
-    dist_pix  = math.hypot(dx, dy)
-    target_theta = (math.atan2(dy, dx) + 3*math.pi/2) % (2*math.pi)
-    err = ((target_theta - pose_theta + math.pi) % (2*math.pi)) - math.pi
+        wp_idx = path_len - len(waypoints) + 1
+        print(f"[{wp_idx:02d}/{path_len}] pose=({map_x:3d},{map_y:3d}) θ={pose_theta:+.2f} | "
+                f"wp=({tx},{ty}) θ={target_theta:+.2f}, dist={dist_pix:5.1f}px, err={err:+.2f}")
 
-    wp_idx = path_len - len(waypoints) + 1
-    print(f"[{wp_idx:02d}/{path_len}] pose=({map_x:3d},{map_y:3d}) θ={pose_theta:+.2f} | "
-            f"wp=({tx},{ty}) θ={target_theta:+.2f}, dist={dist_pix:5.1f}px, err={err:+.2f}")
+        close_px  = 10
+        max_v     = MAX_SPEED * 0.6
+        heading_tol = 0.08
+        Kp        = 8.0
 
-    close_px  = 10
-    max_v     = MAX_SPEED * 0.6
-    heading_tol = 0.08
-    Kp        = 8.0
+        if abs(err) > heading_tol:
+            v_cmd = 0.0
+            omega = -Kp * math.copysign(1.0, err)
+            if abs(err) < 0.15:
+                omega *= 0.4
+        else:
+            v_cmd = max_v
+            omega = 0.0
 
-    if abs(err) > heading_tol:
-        v_cmd = 0.0
-        omega = -Kp * math.copysign(1.0, err)
-        if abs(err) < 0.15:
-            omega *= 0.4
-    else:
-        v_cmd = max_v
-        omega = 0.0
+        vL = v_cmd - omega * AXLE_LENGTH / 2
+        vR = v_cmd + omega * AXLE_LENGTH / 2
 
-    vL = v_cmd - omega * AXLE_LENGTH / 2
-    vR = v_cmd + omega * AXLE_LENGTH / 2
+        # clamp wheel speeds
+        ml = robot_parts["wheel_left_joint"].getMaxVelocity()
+        mr = robot_parts["wheel_right_joint"].getMaxVelocity()
+        scale = max(abs(vL)/ml, abs(vR)/mr, 1.0)
+        vL /= scale; vR /= scale
 
-    # clamp wheel speeds
-    ml = robot_parts["wheel_left_joint"].getMaxVelocity()
-    mr = robot_parts["wheel_right_joint"].getMaxVelocity()
-    scale = max(abs(vL)/ml, abs(vR)/mr, 1.0)
-    vL /= scale; vR /= scale
+        # waypoint reached?
+        if dist_pix < close_px:
+            print(f"✔ reached waypoint {wp_idx} ({tx},{ty})")
+            waypoints.pop(0)
+            vL = vR = 0.0
 
-    # waypoint reached?
-    if dist_pix < close_px:
-        print(f"✔ reached waypoint {wp_idx} ({tx},{ty})")
-        waypoints.pop(0)
-        vL = vR = 0.0
+    # -----------------------------------------------------------------------
+    # SHOPPING MODE (from first file)
+    # -----------------------------------------------------------------------
+    elif mode == "shopping":
+        if shopping_completed:
+            # Has finished shopping -> keep updating time but robot will be stopped forever
+            vL = vR = 0.0
+            continue
+            
+        if not shopping_started:
+            # Initial routine when shopping mode starts
+            vL = vR = -MAX_SPEED/3  # Back up slightly
+            sleep(2)
+            vL = vR = 0.0
+            sleep(2)
+            shopping_started = True
+        
+        # Don't continue if no waypoints
+        if not shopping_waypoints or current_shopping_goal >= len(shopping_waypoints):
+            vL = vR = 0.0
+            continue
+            
+        # Current target waypoint in world coordinates
+        target_x = shopping_waypoints[current_shopping_goal][0]
+        target_y = shopping_waypoints[current_shopping_goal][1]
+        
+        # Next target waypoint for smoother transitions
+        next_x = shopping_waypoints[next_shopping_goal][0] if next_shopping_goal < len(shopping_waypoints) else target_x
+        next_y = shopping_waypoints[next_shopping_goal][1] if next_shopping_goal < len(shopping_waypoints) else target_y
+        
+        # Calculate errors with respect to current and goal position
+        rho = math.sqrt(((pose_x - target_x)**2) + ((pose_y - target_y)**2))
+        alpha = math.atan2(target_y - pose_y, target_x - pose_x) - pose_theta
+        eta = math.atan2(next_y - pose_y, next_x - pose_x) - pose_theta
+        
+        # Handle angle wrapping
+        if alpha < -3.1415: alpha += 6.283
+        if eta < -3.1415: eta += 6.283
+        
+        # Feedback Controller (coefficients from trial/error)
+        dX = rho  # Distance error
+        dTheta = 5 * alpha  # Angular error with gain of 5
+        
+        # Inverse Kinematics Equations (vL and vR as a function dX and dTheta)
+        vL = dX - (dTheta/2)  # Left wheel velocity in rad/s
+        vR = dX + (dTheta/2)  # Right wheel velocity in rad/s
+        
+        # Proportional velocities/Clamp wheel speeds
+        def cmp(a, b):
+            return (a > b) - (a < b)
+            
+        if min(abs(vL), abs(vR)) == abs(vL):
+            vL = cmp(vR, 0) * (vL/vR) * MAX_SPEED  # sign preservation with cmp(vR,0)
+            vR = cmp(vR, 0) * MAX_SPEED
+        else:
+            vR = cmp(vR, 0) * (vR/vL) * MAX_SPEED
+            vL = cmp(vR, 0) * MAX_SPEED
+        
+        # Reduce speed for smoother movement
+        vL *= 0.6
+        vR *= 0.6
+        
+        # Print status information
+        print(f"Shopping: [{current_shopping_goal+1}/{len(shopping_waypoints)}] " 
+              f"pos=({pose_x:.2f},{pose_y:.2f}) -> target=({target_x:.2f},{target_y:.2f}), "
+              f"dist={rho:.2f}, alpha={alpha:.2f}, eta={eta:.2f}")
+              
+        # Waypoint reached?
+        if rho <= 0.3 and abs(eta) <= 0.75:  # Less strict than original for smoother transitions
+            print(f"✓ Reached shopping waypoint {current_shopping_goal+1}")
+            
+            # Check if this waypoint is an item to pick up
+            is_item = False
+            for item in ITEMS_WORLD:
+                if math.sqrt(((target_x - item[0])**2) + ((target_y - item[1])**2)) < 0.1:
+                    is_item = True
+                    break
+                    
+            if is_item:
+                # Stop and pick up the item
+                vL = vR = 0.0
+                print(f"Picking up item at ({target_x:.2f}, {target_y:.2f})")
+                
+                # Close gripper
+                gripper_status = "open"  # This will trigger the gripper to close in the drive section
+                
+                # Wait a moment to simulate pickup
+                sleep(2)
+            
+            # Move to next waypoint
+            current_shopping_goal += 1
+            next_shopping_goal = min(current_shopping_goal + 1, len(shopping_waypoints) - 1)
+            
+            # Check if we've completed all waypoints
+            if current_shopping_goal >= len(shopping_waypoints):
+                shopping_completed = True
+                vL = vR = 0.0
+                print("===> Finished Shopping")
+                print("===> Boulder Dynamics' Grocery Shopper Has Exited.")
 
     # -----------------------------------------------------------------------
     # LIDAR MAPPING (unchanged)
