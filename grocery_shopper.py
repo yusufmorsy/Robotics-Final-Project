@@ -4,6 +4,7 @@
 
 from controller import Robot
 import math, random, numpy as np, collections
+from collections import deque
 
 # Initialization
 print("=== Initializing Grocery Shopper...")
@@ -19,7 +20,7 @@ MOTOR_LEFT      = 10
 MOTOR_RIGHT     = 11
 N_PARTS         = 12
 
-REPS            = 100
+REPS            = 500
 DELTA_Q         = 10
 GOAL_PERCENT    = 0.05
 
@@ -124,7 +125,30 @@ def steer(m,p_from,p_to,delta):
                 p_to=(p_to-p_from)*((i)/11)+p_from
                 break
     return path
+def find_nearest_location(m,sx,sy):
+    visited = set()
+    queue = deque(sx,sy)
+    visited.add(sx,sy)
+    
+    while queue:
+        cur_x = queue.popleft()
+        cur_y = queue.popleft()
+
+        if (cur_x-1, cur_y) not in visited:
+            visited.add((cur_x-1, cur_y)); queue.append(cur_x-1); queue.append(cur_y)
+        if (cur_x+1, cur_y) not in visited:
+            visited.add((cur_x+1, cur_y)); queue.append(cur_x+1); queue.append(cur_y)
+        if (cur_x, cur_y-1) not in visited:
+            visited.add((cur_x, cur_y-1)); queue.append(cur_x); queue.append(cur_y-1)
+        if (cur_x, cur_y+1) not in visited:
+            visited.add((cur_x, cur_y+1)); queue.append(cur_x); queue.append(cur_y+1)
+
+        if m[cur_x, cur_y] == 0:
+            return [cur_x, cur_y]
+    return [sx, sy]
 def rrtstar(m,sx,sy,ex,ey,reps,delta,gp,draw_all,draw_path,print_wp):
+    if m[sx,sy] == 1:
+        sx,sy = find_nearest_location(m[:],sx,sy)
     nodes=[Node(np.array([sx,sy]))]; wpt=[]
     for _ in range(reps):
         new_pt=np.array([ex,ey]) if random.random()<gp else np.array(get_random_valid_vertex(m))
@@ -217,7 +241,7 @@ while robot.step(timestep)!=-1:
             omega = -Kp * math.copysign(1.0, err)   # constant‑speed turn
 
             #Turn slower when almost aiming the right way
-            if abs(err) < 0.05:
+            if abs(err) < 0.10:
                 omega *= 0.4
         else:                               # aligned → drive forward
             v_cmd = max_v
