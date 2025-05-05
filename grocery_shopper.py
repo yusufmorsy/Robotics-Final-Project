@@ -44,6 +44,7 @@ FRAMES_BETWEEN_UPDATES = 5
 PORTIONS              = 36
 BUFFER                = 7
 
+speed = 0
 time_since_last_waypoint = 0
 
 mode = "autonomous"
@@ -357,7 +358,7 @@ while robot.step(timestep)!=-1:
                 mode = "travel to cube" 
                 waypoints = rrtstar(collision_map, map_x, map_y,
                                     goto_x, goto_y, REPS, DELTA_Q, GOAL_PERCENT,
-                                0, 1, 1)
+                                1, 1, 1)
                 vL=vR=0
                 print(waypoints)
                 display.setColor(cube_waypoint_color); display.drawPixel(best_x, best_y)
@@ -441,8 +442,6 @@ while robot.step(timestep)!=-1:
     #if the robot reached the last waypoint during travel to cube mode, then switch to grab cube mode
     elif mode == "travel to cube":
         mode = "grab cube"
-        vL = 0
-        vR = 0
 
     # clamp wheel speeds
     ml = robot_parts["wheel_left_joint"].getMaxVelocity()
@@ -451,9 +450,32 @@ while robot.step(timestep)!=-1:
     vL /= scale; vR /= scale
 
     if mode == "grab cube":
+        #stop
         vL = 0
         vR = 0
-        #ANNA
+        #rotate
+        if speed<0.001:
+            tx, ty    = convert_to_map(best_cube[0], best_cube[1])
+            dx, dy    = tx - map_x, ty - map_y
+            dist_pix  = math.hypot(dx, dy)
+            target_theta = (math.atan2(dy, dx) + 3*math.pi/2) % (2*math.pi)
+            err = ((target_theta - pose_theta + math.pi) % (2*math.pi)) - math.pi
+            
+            max_v     = MAX_SPEED * 0.6
+            heading_tol = 0.08
+            Kp        = 8.0
+
+            if abs(err) > heading_tol:
+                omega = -Kp * math.copysign(1.0, err)
+                if abs(err) < 0.15:
+                    omega *= 0.4
+            else:
+                v_cmd = max_v
+                omega = 0.0
+            vL = -omega * AXLE_LENGTH / 2
+            vR =  omega * AXLE_LENGTH / 2
+            if abs(err) < 0.10:
+                #ANNA
 
     # -----------------------------------------------------------------------
     # LIDAR MAPPING (unchanged)
