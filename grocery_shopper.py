@@ -218,7 +218,7 @@ def rrtstar(m, sx, sy, ex, ey, reps, delta, gp, draw_all, draw_path, print_wp):
             break
 
     # trace back
-    node = nodes[-1]
+    node = get_nearest_vertex(nodes, [ex, ey])
     while node:
         if draw_path:
             display.setColor(0x60FF40)
@@ -378,6 +378,10 @@ while robot.step(timestep)!=-1:
     #test current leg for collision ------------------------------
     if waypoints:
         tx, ty = waypoints[0]
+        #go backwards if it's been a while since we've progressed
+        if time_since_last_waypoint > 450:
+            vL = -max_v
+            vR = -max_v
         #if path_blocked(map_x, map_y, tx, ty, map) or 
         if time_since_last_waypoint > 500: 
             print("⟳ path blocked – replanning")
@@ -475,6 +479,7 @@ while robot.step(timestep)!=-1:
             vL = -omega * AXLE_LENGTH / 2
             vR =  omega * AXLE_LENGTH / 2
             if abs(err) < 0.10:
+                pass
                 #ANNA
 
     # -----------------------------------------------------------------------
