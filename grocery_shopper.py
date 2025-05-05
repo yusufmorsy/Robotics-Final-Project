@@ -97,6 +97,8 @@ DRAW_COLLISION = 0
 time = 0
 current_frame  = 0
 current_portion= PORTIONS-1
+cube_x = -1
+cube_y = -1
 
 ITEMS_WORLD = [
     ( 3.49946,  7.16914, 1.07487),
@@ -266,6 +268,7 @@ last_waypoint = 0
 
 while robot.step(timestep)!=-1:
     time += 1
+    time_since_last_waypoint += 1
     if time % 20 == 0:
         print("mode:", mode, "time_since_last_waypoint:", time_since_last_waypoint)
     key=keyboard.getKey()
@@ -309,7 +312,7 @@ while robot.step(timestep)!=-1:
     # ----
     # CV
     #set timestep mod to diff numbers to get more or less freq obj detection 
-    if mode != "travel to cube" and (time % 50 == 0): 
+    if mode == "autonomous" and (time % 50 == 0): 
         print("looking for cubes")
         photo = camera.getImageArray()
         #opencv stuff
@@ -335,16 +338,20 @@ while robot.step(timestep)!=-1:
             print(f'map {map_x} {map_y}')
             #uncomment if you want the robot to detect cubes and go towards them. 
             
-            if dist_from_center <=200 and conf >= 0.5:
+            if dist_from_center <=200 and conf >= 0.65:
                 #set conf lower to detect cubes more frequently 
                 #go towards there 
-                print("found cube?")
+                cube_x = int(x1)
+                cube_y = int(y2)
+
+                print("found cube at", cube_x, ",", cube_y)
                 mode = "travel to cube" 
                 waypoints = rrtstar(collision_map, map_x, map_y,
-                                    x1, y2, REPS, DELTA_Q, GOAL_PERCENT,
+                                    cube_x, cube_y, REPS, DELTA_Q, GOAL_PERCENT,
                                 0, 1, 1)
                 print(waypoints)
                 display.setColor(cube_waypoint_color); display.drawPixel(x1,y1)
+                
                 break
             
     # ----
@@ -358,11 +365,11 @@ while robot.step(timestep)!=-1:
                                 0, 1, 1)
             path_len = len(waypoints)
 
-    time_since_last_waypoint += 1
     #test current leg for collision ------------------------------
     if waypoints:
         tx, ty = waypoints[0]
-        if path_blocked(map_x, map_y, tx, ty, map) or time_since_last_waypoint > 500: 
+        #if path_blocked(map_x, map_y, tx, ty, map) or 
+        if time_since_last_waypoint > 500: 
             print("⟳ path blocked – replanning")
             time_since_last_waypoint = 0
             #gx, gy = get_random_valid_vertex_far(map_x, map_y)          # keep same final goal
@@ -372,6 +379,11 @@ while robot.step(timestep)!=-1:
                                 0, 1, 1)
             path_len = len(waypoints)
         tx, ty = waypoints[0]
+
+    # If it's just been sitting there staring at a wall for a while, clearly something messed up, so just go back into autonomous
+    if mode != "autonomous" and time_since_last_waypoint > 1000:
+        time_since_last_waypoint = 0
+        mode = "autonomous"
 
     #drive toward first waypoint --------------------------------
     if waypoints:
@@ -417,6 +429,12 @@ while robot.step(timestep)!=-1:
                 waypoints.pop(0)
             vL = vR = 0.0
 
+    #if the robot reached the last waypoint during travel to cube mode, then switch to grab cube mode
+    elif mode == "travel to cube":
+        mode = "grab cube"
+        vL = 0
+        vR = 0
+
     # clamp wheel speeds
     ml = robot_parts["wheel_left_joint"].getMaxVelocity()
     mr = robot_parts["wheel_right_joint"].getMaxVelocity()
@@ -434,7 +452,7 @@ while robot.step(timestep)!=-1:
                 alpha=lidar_offsets[i]+pose_theta
                 ox=-math.cos(alpha)*r; oy=math.sin(alpha)*r
                 mx,my=convert_to_map(ox+pose_x,oy+pose_y)
-                map[mx,my]=min(map[mx,my]+0.025,1.0)
+                map[mx,my]=min(map[mx,my]+0.035,1.0)
                 if map[mx,my]>=0.2:
                     for dx in range(-BUFFER,BUFFER+1):
                         for dy in range(-BUFFER,BUFFER+1):
