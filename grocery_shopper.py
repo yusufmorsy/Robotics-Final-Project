@@ -44,7 +44,6 @@ FRAMES_BETWEEN_UPDATES = 5
 PORTIONS              = 36
 BUFFER                = 7
 
-speed = 0
 time_since_last_waypoint = 0
 
 mode = "autonomous"
@@ -218,6 +217,7 @@ def rrtstar(m, sx, sy, ex, ey, reps, delta, gp, draw_all, draw_path, print_wp):
             break
 
     # trace back
+    #node = nodes[-1]
     node = get_nearest_vertex(nodes, [ex, ey])
     while node:
         if draw_path:
@@ -250,11 +250,124 @@ def path_blocked(px, py, qx, qy, occ_grid, thresh=0.99):
             return True
     return False
 
+def openGrip():
+        robot.getDevice("gripper_right_finger_joint").setPosition(0.04)
+        robot.getDevice("gripper_left_finger_joint").setPosition(0.04)
+
+def closeGrip():
+    robot.getDevice("gripper_right_finger_joint").setPosition(0.0)
+    robot.getDevice("gripper_left_finger_joint").setPosition(0.0)
+
+
+from ikpy.chain import Chain
+vrb = True
+my_chain = Chain.from_urdf_file("robot_urdf.urdf", base_elements=["base_link", "base_link_Torso_joint", "Torso", "torso_lift_joint", "torso_lift_link", "torso_lift_link_TIAGo front arm_11367_joint", "TIAGo front arm_11367"])
+
+for link_id in range(len(my_chain.links)):
+
+        # This is the actual link object
+    link = my_chain.links[link_id]
+    # I've disabled "torso_lift_joint" manually as it can cause
+    # the TIAGO to become unstable.
+    if link.name not in part_names or  link.name =="torso_lift_joint":
+        print("Disabling {}".format(link.name))
+        my_chain.active_links_mask[link_id] = False
+
+
+motors = []
+for link in my_chain.links:
+    if link.name in part_names and link.name != "torso_lift_joint":
+        motor = robot.getDevice(link.name)
+        # Make sure to account for any motors that
+        # require a different maximum velocity!
+        if link.name == "torso_lift_joint":
+            motor.setVelocity(0.07)
+        else:
+            motor.setVelocity(1)
+        position_sensor = motor.getPositionSensor()
+        position_sensor.enable(timestep)
+        motors.append(motor)
+
+def calculateIk(offset_target, orient=True, orientation_mode='Y', target_orientation=[0,0,1]):
+    '''
+    Parameters
+    ----------
+    offset_target : list
+        A vector specifying the target position of the end effector
+    orient : bool, optional
+        Whether or not to orient, default True
+    orientation_mode : str, optional
+        Either "X", "Y", or "Z", default "Y"
+    target_orientation : list, optional
+        The target orientation vector, default [0,0,1]
+    Returns
+    -------
+    list
+        The calculated joint angles from inverse kinematics
+    '''
+    # Get the number of links in the chain
+    num_links = len(my_chain.links)
+    # Create initial position array with the correct size
+    initial_position = [0] * num_links
+    # Map each motor to its corresponding link position
+    motor_idx = 0
+    for i in range(num_links):
+        link_name = my_chain.links[i].name
+        if link_name in part_names and link_name != "torso_lift_joint":
+            if motor_idx < len(motors):
+                initial_position[i] = motors[motor_idx].getPositionSensor().getValue()
+                motor_idx += 1
+    # Calculate IK
+    ikResults = my_chain.inverse_kinematics(
+        offset_target, 
+        initial_position=initial_position,
+        target_orientation=target_orientation, 
+        orientation_mode=orientation_mode
+    )
+    # Validate result
+    position = my_chain.forward_kinematics(ikResults)
+    squared_distance = math.sqrt(
+            (position[0, 3] - offset_target[0])**2 + 
+            (position[1, 3] - offset_target[1])**2 + 
+            (position[2, 3] - offset_target[2])**2
+        )
+    print(f"IK calculated with error - {squared_distance}")
+    return ikResults
+
+def checkArmAtPosition(ikResults, cutoff=0.00005):
+    '''Checks if arm at position, given ikResults'''
+    
+    # Get the initial position of the motors
+    initial_position = [0,0,0,0] + [m.getPositionSensor().getValue() for m in motors] + [0,0,0,0]
+    print(f'arm pos {initial_position}')
+    # Calculate the arm
+    arm_error = 0
+    for item in range(14):
+        arm_error += (initial_position[item] - ikResults[item])**2
+    arm_error = math.sqrt(arm_error)
+    print(f'arm error {arm_error}')
+    if arm_error < cutoff:
+        if vrb:
+            print("Arm at position.")
+        return True
+    return False
+
+def moveArmToTarget(ikResults):
+    '''Moves arm given ikResults'''
+    # Set the robot motors
+    for res in range(len(ikResults)):
+        if my_chain.links[res].name in part_names:
+            # This code was used to wait for the trunk, but now unnecessary.
+            # if abs(initial_position[2]-ikResults[2]) < 0.1 or res == 2:
+            robot.getDevice(my_chain.links[res].name).setPosition(ikResults[res])
+            if vrb:
+                print("Setting {} to {}".format(my_chain.links[res].name, ikResults[res]))
+
 # --
 # Init CV using ML 
 #detect cubes using YOLOv8 
 detect_cubes = YOLO('best_18.pt')
-
+speed = 0 
 travel_to_cube = False
 detect_cubes.conf = 0.5
 detect_cubes.iou = 0.4
@@ -335,7 +448,7 @@ while robot.step(timestep)!=-1:
             dist_from_center = math.hypot(map_x - center_x, map_y - center_y)
             print(f'{label} found with confidence ({conf}) at screen coordinates ({center_x}), ({center_y}))')
             
-            if dist_from_center <=200 and conf >= 0.65:
+            if dist_from_center <=200 and conf >= 0.4:
                 #set conf lower to detect cubes more frequently 
                 #go towards there 
                 print("SPOTTED CUBE AHEAD FOR SURE")
@@ -378,11 +491,13 @@ while robot.step(timestep)!=-1:
     #test current leg for collision ------------------------------
     if waypoints:
         tx, ty = waypoints[0]
-        #go backwards if it's been a while since we've progressed
+        #if path_blocked(map_x, map_y, tx, ty, map) or 
+
+                #go backwards if it's been a while since we've progressed
         if time_since_last_waypoint > 450:
             vL = -max_v
             vR = -max_v
-        #if path_blocked(map_x, map_y, tx, ty, map) or 
+
         if time_since_last_waypoint > 500: 
             print("⟳ path blocked – replanning")
             time_since_last_waypoint = 0
@@ -446,6 +561,9 @@ while robot.step(timestep)!=-1:
     #if the robot reached the last waypoint during travel to cube mode, then switch to grab cube mode
     elif mode == "travel to cube":
         mode = "grab cube"
+        vL = 0
+        vR = 0
+
 
     # clamp wheel speeds
     ml = robot_parts["wheel_left_joint"].getMaxVelocity()
@@ -454,9 +572,9 @@ while robot.step(timestep)!=-1:
     vL /= scale; vR /= scale
 
     if mode == "grab cube":
-        #stop
         vL = 0
         vR = 0
+        
         #rotate
         if speed<0.001:
             tx, ty    = convert_to_map(best_cube[0], best_cube[1])
@@ -479,8 +597,15 @@ while robot.step(timestep)!=-1:
             vL = -omega * AXLE_LENGTH / 2
             vR =  omega * AXLE_LENGTH / 2
             if abs(err) < 0.10:
-                pass
                 #ANNA
+                move_here = calculateIk(best_cube)
+                #INVERSE KINEMATICS 
+                if not checkArmAtPosition(move_here, cutoff=0.00005):
+                    moveArmToTarget(move_here)
+                
+
+
+
 
     # -----------------------------------------------------------------------
     # LIDAR MAPPING (unchanged)
