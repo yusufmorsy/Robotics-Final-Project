@@ -332,28 +332,37 @@ while robot.step(timestep)!=-1:
             center_y = (y2 + y1)/2
             label = labels[int(cls)]
             dist_from_center = math.hypot(map_x - center_x, map_y - center_y)
-            print(f'{label} found with confidence ({conf})')
-            print(f'{label} center at ({center_x}), ({center_y}))')
-            print(f'dist from center {dist_from_center}')
-            print(f'map {map_x} {map_y}')
-            #uncomment if you want the robot to detect cubes and go towards them. 
+            print(f'{label} found with confidence ({conf}) at screen coordinates ({center_x}), ({center_y}))')
             
             if dist_from_center <=200 and conf >= 0.65:
                 #set conf lower to detect cubes more frequently 
                 #go towards there 
-                cube_x = int(x1)
-                cube_y = int(y2)
+                print("SPOTTED CUBE AHEAD FOR SURE")
 
-                print("found cube at", cube_x, ",", cube_y)
+                #find nearest item in the array
+                best_dist = 9999
+                for i in ITEMS_WORLD:
+                    world_x, world_y = i[0], i[1]
+                    x, y = convert_to_map(world_x, world_y)
+                    dist = math.hypot(map_x - x, map_y - y)
+                    
+                    if dist < best_dist:
+                        best_dist = dist
+                        best_x, best_y = x, y
+                        best_cube = i
+                print("The cube,", best_cube, "is at map coords", best_x, best_y)
+                goto_x, goto_y = find_nearest_location(collision_map, best_x, best_y)
+                print("But that is inside a wall, so actually go to", goto_x, goto_y)
+                    
                 mode = "travel to cube" 
                 waypoints = rrtstar(collision_map, map_x, map_y,
-                                    cube_x, cube_y, REPS, DELTA_Q, GOAL_PERCENT,
+                                    goto_x, goto_y, REPS, DELTA_Q, GOAL_PERCENT,
                                 0, 1, 1)
+                vL=vR=0
                 print(waypoints)
-                display.setColor(cube_waypoint_color); display.drawPixel(x1,y1)
+                display.setColor(cube_waypoint_color); display.drawPixel(best_x, best_y)
                 
                 break
-            
     # ----
 
     if mode == "autonomous":
@@ -381,7 +390,7 @@ while robot.step(timestep)!=-1:
         tx, ty = waypoints[0]
 
     # If it's just been sitting there staring at a wall for a while, clearly something messed up, so just go back into autonomous
-    if mode != "autonomous" and time_since_last_waypoint > 1000:
+    if mode != "autonomous" and time_since_last_waypoint > 800:
         time_since_last_waypoint = 0
         mode = "autonomous"
 
@@ -440,6 +449,11 @@ while robot.step(timestep)!=-1:
     mr = robot_parts["wheel_right_joint"].getMaxVelocity()
     scale = max(abs(vL)/ml, abs(vR)/mr, 1.0)
     vL /= scale; vR /= scale
+
+    if mode == "grab cube":
+        vL = 0
+        vR = 0
+        #ANNA
 
     # -----------------------------------------------------------------------
     # LIDAR MAPPING (unchanged)
